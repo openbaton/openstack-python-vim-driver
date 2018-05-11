@@ -1,19 +1,19 @@
 from setuptools import setup, find_packages
 
 
-with open('README.rst') as f:
+with open('README.md') as f:
     readme = f.read()
-
-with open('LICENSE') as f:
-    license = f.read()
 
 setup(
     name='openstack-vim-driver',
-    version='0.1.0dev1',
+    version='0.1.0.dev1',
     description='OpenStack VIM Driver for Open Baton',
     long_description=readme,
+    long_description_content_type='text/markdown',
     url='https://github.com/openbaton/openstack-python-vim-driver',
-    license=license,
+    author="Open Baton",
+    author_email="dev@openbaton.org",
+    license='Apache 2',
     packages=find_packages(),
     install_requires=[
         'python-plugin-sdk',
@@ -21,5 +21,13 @@ setup(
         'python-neutronclient',
         'python-novaclient'
     ],
-    scripts=['etc/openstack-vim-driver']
+    scripts=['openstack-vim-driver'],
+    include_package_data=True,
+    classifiers=[
+        'Development Status :: 4 - Beta',
+        'Intended Audience :: Developers',
+        'Topic :: Software Development :: Build Tools',
+        'Topic :: Utilities',
+        'License :: OSI Approved :: Apache Software License',
+    ]
 )

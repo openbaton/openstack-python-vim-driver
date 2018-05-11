@@ -569,7 +569,18 @@ class OpenstackVimDriver(VimDriver):
         raise Exception('No external network found connected to network {}'.format(network_id))
 
 def main():
-    parser = argparse.ArgumentParser(description='This is an Open Baton VIM Driver for OpenStack written in Python')
+    path_to_file = os.path.abspath(os.path.dirname(__file__))
+    conf_example_path = os.path.join(path_to_file, 'etc/configuration.ini')
+    help_epilog = 'This is how the content of the configuration file could look like:\n\n'
+    try:
+        with open(conf_example_path, 'r') as conf_example_file:
+            help_epilog += conf_example_file.read()
+        help_epilog += ' \n\n'
+    except Exception:
+        help_epilog = None
+
+    parser = argparse.ArgumentParser(description='This is an Open Baton VIM Driver for OpenStack written in Python',
+                                     formatter_class=argparse.RawDescriptionHelpFormatter, epilog=help_epilog)
     parser.add_argument('-t', '--type', type=str, help='the type of the VIM driver, default is openstack',
                         default="openstack")
     parser.add_argument('-w', '--worker_threads', type=int,
@@ -582,6 +593,7 @@ def main():
                         help='the name of the VIM driver, default is the VIM driver\'s <type>', default="")
     parser.add_argument('-c', '--conf-file', type=str, default="",
                         help='configuration_file location, default is /etc/openbaton/<type>_vim_driver.ini')
+
     args = parser.parse_args()
     plugin_type = args.type
     config_file_location = args.conf_file
@@ -595,7 +607,7 @@ def main():
     if not config_file_location:
         config_file_location = '/etc/openbaton/{}_vim_driver.ini'.format(plugin_type)
     if not os.path.exists(config_file_location):
-        sys.stderr.write('Configuration file {} does not exist\n'.format(config_file_location))
+        sys.stderr.write('Configuration file {} does not exist.\n'.format(config_file_location))
         sys.exit(1)
 
     with open(config_file_location, 'rt') as f:
