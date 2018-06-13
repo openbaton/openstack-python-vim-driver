@@ -12,6 +12,7 @@ from org.openbaton.plugin.sdk.vim import VimDriver
 import logging
 import logging.config
 import os.path
+import tempfile
 
 from glanceclient import Client as Glance
 from neutronclient.v2_0.client import Client as Neutron
@@ -21,6 +22,9 @@ import keystoneauth1.session
 import keystoneauth1
 
 log = logging.getLogger(__name__)
+
+# used for caching the created pem files
+cert_files = {}
 
 
 def get_keystone_version(authUrl):
@@ -32,45 +36,80 @@ def get_keystone_version(authUrl):
         raise ValueError('Could not extract API version from auth URL')
 
 
+def create_cert_file(vim_instance):
+    """Create a temporary file for storing the SSL certificate of a VIM
+    and return the file name. If the cert_files dict already contains
+    an entry for the VIM then no new file is created.
+    :param vim_instance
+    """
+    if vim_instance.get('openstackSslCertificate') is not None:
+        vim_id = vim_instance.get('id')
+        if vim_id in cert_files:
+            value = cert_files.get(vim_id)
+            # making sure that the certificate was not changed in the vim
+            if value.get('cert') == vim_instance.get('openstackSslCertificate'):
+                return value.get('file_path')
+
+        cert_file = tempfile.NamedTemporaryFile(delete=False)
+        cert_file.write(vim_instance.get('openstackSslCertificate').encode())
+        cert_file.flush()
+        cert_files[vim_id] = {
+            'cert': vim_instance.get('openstackSslCertificate'),
+            'file_path': cert_file.name
+        }
+        return cert_file.name
+
+
 class OpenstackVimDriver(VimDriver):
     def __init__(self, deallocate_floating_ips=True, connection_timeout=10, wait_for_vm=15):
         self.deallocate_floating_ips = deallocate_floating_ips
         self.connection_timeout = connection_timeout if connection_timeout > 0 else None
         self.wait_for_vm = wait_for_vm
 
-    def get_keystone_session(self, authUrl, username, password, project_id_or_tenant_name):
+    def get_keystone_session(self, authUrl, username, password, project_id_or_tenant_name, user_domain_name=None,
+                             cert_file_path=None):
         loader = keystoneauth1.loading.get_plugin_loader('password')
+        cert_file_path = True if cert_file_path is None else cert_file_path
         auth = loader.load_from_options(auth_url=authUrl, username=username, password=password,
-                                        project_id=project_id_or_tenant_name)
+                                        project_id=project_id_or_tenant_name, user_domain_name=user_domain_name)
         # theoretically it should be possible to pass a certificate to the session but it seems not to work
-        sess = keystoneauth1.session.Session(auth=auth, timeout=self.connection_timeout)
+        sess = keystoneauth1.session.Session(auth=auth, timeout=self.connection_timeout, verify=cert_file_path)
         return sess
 
     def get_glance_client(self, vim_instance):
+        cert_file_path = create_cert_file(vim_instance)
         glance_client = Glance(version='2',
                                session=self.get_keystone_session(
                                    vim_instance.get('authUrl'),
                                    vim_instance.get('username'),
                                    vim_instance.get('password'),
-                                   vim_instance.get('tenant'))
+                                   vim_instance.get('tenant'),
+                                   vim_instance.get('domain'),
+                                   cert_file_path)
                                )
         return glance_client
 
     def get_neutron_client(self, vim_instance):
+        cert_file_path = create_cert_file(vim_instance)
         neutron_client = Neutron(session=self.get_keystone_session(
             vim_instance.get('authUrl'),
             vim_instance.get('username'),
             vim_instance.get('password'),
-            vim_instance.get('tenant')))
+            vim_instance.get('tenant'),
+            vim_instance.get('domain'),
+            cert_file_path))
         return neutron_client
 
     def get_nova_client(self, vim_instance):
+        cert_file_path = create_cert_file(vim_instance)
         nova_client = Nova(version='2',
                            session=self.get_keystone_session(
                                vim_instance.get('authUrl'),
                                vim_instance.get('username'),
                                vim_instance.get('password'),
-                               vim_instance.get('tenant')))
+                               vim_instance.get('tenant'),
+                               vim_instance.get('domain'),
+                               cert_file_path))
         return nova_client
 
     def list_images(self, vim_instance: dict, glance_client=None):
@@ -474,7 +513,8 @@ class OpenstackVimDriver(VimDriver):
             server = nova_client.servers.get(server.id)
         else:
             if not self.__server_is_active(server):
-                raise Exception('Timeout: after {} seconds the VM {} is still not active'.format(self.wait_for_vm, server.name))
+                raise Exception(
+                    'Timeout: after {} seconds the VM {} is still not active'.format(self.wait_for_vm, server.name))
 
         return self.__os_server_to_ob_server(server, self.list_images(vim_instance), self.list_flavors(vim_instance))
 
@@ -567,6 +607,7 @@ class OpenstackVimDriver(VimDriver):
             if network_id in connected_networks:
                 return ext_net.get('extId')
         raise Exception('No external network found connected to network {}'.format(network_id))
+
 
 def main():
     path_to_file = os.path.abspath(os.path.dirname(__file__))
