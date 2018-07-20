@@ -19,7 +19,8 @@ setup(
         'python-plugin-sdk',
         'python-glanceclient',
         'python-neutronclient',
-        'python-novaclient'
+        'python-novaclient',
+        'requests'
     ],
     scripts=['openstack-vim-driver'],
     include_package_data=True,

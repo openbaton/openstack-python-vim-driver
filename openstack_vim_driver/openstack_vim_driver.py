@@ -4,6 +4,8 @@ import ipaddress
 import time
 
 import sys
+
+import requests
 from org.openbaton.plugin.sdk.catalogue import Network, DeploymentFlavour, Subnet, NFVImage, Quota, Server, ImageStatus, \
     AvailabilityZone, PopKeypair
 from org.openbaton.plugin.sdk.utils import start_vim_driver, get_map
@@ -125,6 +127,73 @@ class OpenstackVimDriver(VimDriver):
                          disk_format=i.get('disk_format'),
                          container_format=i.get('container_format'),
                          status=ImageStatus(i.get('status').upper())) for i in glance_client.images.list()]
+
+    def add_image(self, vim_instance: dict, image: dict, image_file_or_url, glance_client=None) -> NFVImage:
+        """
+        Add an image to OpenStack. The method expects the a URL pointing to the image file.
+
+        :param vim_instance:
+        :param image: a dictionary containing the keys: name, containerFormat, isPublic, diskFormat, minDiskSpace and minRam
+        :param image_file_or_url: the URL pointing to the image file
+        :param glance_client:
+        :return: an NFVImage object representing the created image
+        """
+        image_name = image.get('name')
+        if image_name is None or image_name == '':
+            raise ValueError('The image name to be used for creating the image must be set')
+        container_format = image.get('containerFormat')
+        if container_format not in ['ami', 'ari', 'aki', 'bare', 'ovf', 'ova', 'docker']:
+            raise ValueError(
+                'The passed container format is {} but only the following values are allowed: ami, ari, aki, bare, ovf, ova, docker'.format(
+                    container_format))
+        is_public = image.get('isPublic')
+        disk_format = image.get('diskFormat')
+        if disk_format not in ['ami', 'ari', 'aki', 'vhd', 'vhdx', 'vmdk', 'raw', 'qcow2', 'vdi', 'iso', 'ploop']:
+            raise ValueError(
+                'The passed disk format is {} but only the following values are allowed: ami, ari, aki, vhd, vhdx, vmdk, raw, qcow2, vdi, iso, ploop'.format(
+                    disk_format))
+        min_disk_space = image.get('minDiskSpace')
+        if min_disk_space is None or type(min_disk_space) is not int or min_disk_space < 0:
+            raise ValueError(
+                'The amount of disk space (in GB) required to boot the image has to be set to a non-negative integer value')
+        min_ram = image.get('minRam')
+        if min_ram is None or type(min_ram) is not int or min_ram < 0:
+            raise ValueError(
+                'The amount of RAM (in MB) required to boot the image has to be set to a non-negative integer value')
+        if glance_client is None:
+            glance_client = self.get_glance_client(vim_instance)
+        # create image
+        try:
+            image_created = glance_client.images.create(name=image_name, disk_format=disk_format.lower(),
+                                                        container_format=container_format.lower(),
+                                                        min_disk=min_disk_space,
+                                                        min_ram=min_ram,
+                                                        visibility=('public' if is_public else 'private'))
+        except Exception as e:
+            log.error('Exception while creating the image {}: {}'.format(image_name, e))
+            raise
+        try:
+            with requests.get(image_file_or_url, stream=True) as image_request:
+                # upload data to image
+                glance_client.images.upload(image_created.id, image_request.raw)
+        except Exception as e:
+            log.error('Exception while uploading image to VIM {} ({}): {}'.format(vim_instance.get('name'),
+                                                                                  vim_instance.get('id'), e))
+            try:
+                # delete image if upload of data failed
+                glance_client.images.delete(image_created.id)
+            except:
+                log.error('Exception while removing image')
+        try:
+            image_created = glance_client.images.get(image_created.id)
+        except:
+            pass
+        return NFVImage(ext_id=image_created.id, name=image_created.name, min_ram=image_created.min_ram,
+                        min_disk_space=image_created.min_disk,
+                        is_public=(True if image_created.visibility == 'public' else False),
+                        disk_format=image_created.disk_format,
+                        container_format=image_created.container_format, created=image_created.created_at,
+                        updated=image_created.updated_at, status=image_created.status)
 
     def __get_subnet(self, subnet_id, neutron_client=None, vim_instance=None):
         if neutron_client is None:
