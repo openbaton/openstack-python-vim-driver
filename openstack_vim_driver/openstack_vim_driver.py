@@ -188,12 +188,18 @@ class OpenstackVimDriver(VimDriver):
             image_created = glance_client.images.get(image_created.id)
         except:
             pass
+        try:
+            image_status = ImageStatus(image_created.status.upper() if
+                                       image_created.status is not None and type(image_created.status) == str else None)
+        except ValueError:
+            log.warning('Image status ' + image_created.status + ' of the created image seems to be invalid')
+            image_status = ImageStatus('UNRECOGNIZED')
         return NFVImage(ext_id=image_created.id, name=image_created.name, min_ram=image_created.min_ram,
                         min_disk_space=image_created.min_disk,
                         is_public=(True if image_created.visibility == 'public' else False),
                         disk_format=image_created.disk_format,
                         container_format=image_created.container_format, created=image_created.created_at,
-                        updated=image_created.updated_at, status=image_created.status)
+                        updated=image_created.updated_at, status=image_status)
 
     def __get_subnet(self, subnet_id, neutron_client=None, vim_instance=None):
         if neutron_client is None:
