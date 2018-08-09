@@ -6,7 +6,7 @@ with open('README.md') as f:
 
 setup(
     name='openstack-vim-driver',
-    version='0.1.0',
+    version='6.0.0rc1',
     description='OpenStack VIM Driver for Open Baton',
     long_description=readme,
     long_description_content_type='text/markdown',

@@ -6,7 +6,7 @@ cffi==1.11.5
 chardet==3.0.4
 cliff==2.11.0
 cmd2==0.8.5
-cryptography==2.2.2
+cryptography==2.3
 debtcollector==1.19.0
 decorator==4.3.0
 deprecation==2.0.2
@@ -43,7 +43,7 @@ python-glanceclient==2.11.0
 python-keystoneclient==3.16.0
 python-neutronclient==6.8.0
 python-novaclient==10.2.0
-python-plugin-sdk==5.0.0
+python-plugin-sdk==6.0.0rc1
 pytz==2018.4
 PyYAML==3.12
 requests==2.18.4
