@@ -72,6 +72,9 @@ class OpenstackVimDriver(VimDriver):
                              cert_file_path=None):
         loader = keystoneauth1.loading.get_plugin_loader('password')
         cert_file_path = True if cert_file_path is None else cert_file_path
+        if not user_domain_name:
+            user_domain_name = 'Default'
+
         auth = loader.load_from_options(auth_url=authUrl, username=username, password=password,
                                         project_id=project_id_or_tenant_name, user_domain_name=user_domain_name)
         # theoretically it should be possible to pass a certificate to the session but it seems not to work
