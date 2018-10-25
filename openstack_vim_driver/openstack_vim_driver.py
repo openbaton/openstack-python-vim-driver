@@ -223,6 +223,37 @@ class OpenstackVimDriver(VimDriver):
                         container_format=image_created.container_format, created=image_created.created_at,
                         updated=image_created.updated_at, status=image_status)
 
+    def add_flavor(self, vim_instance: dict, deployment_flavour: dict, nova_client=None):
+        """
+        Add a flavor to OpenStack.
+
+        :param vim_instance:
+        :param deployment_flavour: a dictionary containing the keys: flavour_key, disk, ram and vcpus
+        :param nova_client:
+        :return: A DeploymentFlavour object representing the created flavor
+        """
+        name = deployment_flavour.get('flavour_key')
+        disk = deployment_flavour.get('disk')
+        ram = deployment_flavour.get('ram')
+        vcpus = deployment_flavour.get('vcpus')
+        if name is None or name == '':
+            raise ValueError('The flavor key, which will be used as the name of the flavor, has to be set')
+        if disk is None or type(disk) is not int or disk < 0:
+            raise ValueError('The falvor\'s disk space (in GB) has to be set to a non-negative integer value')
+        if ram is None or type(ram) is not int or ram < 0:
+            raise ValueError('The flavor\'s RAM (in MB) has to be set to a non-negative integer value')
+        if vcpus is None or type(vcpus) is not int or vcpus < 0:
+            raise ValueError('The flavor\'s VCPUs value has to be set to a non-negative integer value')
+        if nova_client is None:
+            nova_client = self.get_nova_client(vim_instance)
+
+        try:
+            flav = nova_client.flavors.create(name, ram, vcpus, disk)
+        except Exception as e:
+            log.error('Unable to create flavor {}: {}'.format(name, e))
+            raise
+        return DeploymentFlavour(flavour_key=flav.name, ext_id=flav.id, ram=flav.ram, disk=flav.disk, vcpu=flav.vcpus)
+
     def __get_subnet(self, subnet_id, neutron_client=None, vim_instance=None):
         if neutron_client is None:
             neutron_client = self.get_neutron_client(vim_instance)
