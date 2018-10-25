@@ -29,8 +29,14 @@ log = logging.getLogger(__name__)
 cert_files = {}
 
 
-def get_keystone_version(authUrl):
-    """Probably not even needed."""
+def get_identity_api_version(authUrl):
+    """
+    Returns the version of OpenStack's identity API based on the given authUrl.
+    The version is returned as a string.
+
+    :param authUrl:
+    :return:
+    """
     for i in reversed(authUrl.split('/')):
         if i.startswith('v'):
             return i[1:]
@@ -72,8 +78,20 @@ class OpenstackVimDriver(VimDriver):
                              cert_file_path=None):
         loader = keystoneauth1.loading.get_plugin_loader('password')
         cert_file_path = True if cert_file_path is None else cert_file_path
-        if not user_domain_name:
-            user_domain_name = 'Default'
+
+        identity_api_version = get_identity_api_version(authUrl)
+        if identity_api_version.startswith('3'):
+            if not user_domain_name:
+                log.warning(
+                    'OpenStack identity API version 3 requires a domain. '
+                    'It is not specified in the VIM instance so it will be set to \'Default\'')
+                user_domain_name = 'Default'
+        elif identity_api_version.startswith('2') and user_domain_name is not None:
+            log.warning(
+                'OpenStack identity API version 2 does not require a domain, but the VIM instance includes domain={}. '
+                'The domain will not be used to prevent authentication failures'.format(
+                    user_domain_name))
+            user_domain_name = None
 
         auth = loader.load_from_options(auth_url=authUrl, username=username, password=password,
                                         project_id=project_id_or_tenant_name, user_domain_name=user_domain_name)
@@ -145,13 +163,14 @@ class OpenstackVimDriver(VimDriver):
         if image_name is None or image_name == '':
             raise ValueError('The image name to be used for creating the image must be set')
         container_format = image.get('containerFormat')
-        if container_format not in ['ami', 'ari', 'aki', 'bare', 'ovf', 'ova', 'docker']:
+        if container_format.lower() not in ['ami', 'ari', 'aki', 'bare', 'ovf', 'ova', 'docker']:
             raise ValueError(
                 'The passed container format is {} but only the following values are allowed: ami, ari, aki, bare, ovf, ova, docker'.format(
                     container_format))
         is_public = image.get('isPublic')
         disk_format = image.get('diskFormat')
-        if disk_format not in ['ami', 'ari', 'aki', 'vhd', 'vhdx', 'vmdk', 'raw', 'qcow2', 'vdi', 'iso', 'ploop']:
+        if disk_format.lower() not in ['ami', 'ari', 'aki', 'vhd', 'vhdx', 'vmdk', 'raw', 'qcow2', 'vdi', 'iso',
+                                       'ploop']:
             raise ValueError(
                 'The passed disk format is {} but only the following values are allowed: ami, ari, aki, vhd, vhdx, vmdk, raw, qcow2, vdi, iso, ploop'.format(
                     disk_format))
