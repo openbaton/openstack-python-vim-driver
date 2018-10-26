@@ -19,6 +19,7 @@ import tempfile
 from glanceclient import Client as Glance
 from neutronclient.v2_0.client import Client as Neutron
 from novaclient.client import Client as Nova
+from novaclient.exceptions import NotFound as ServerNotFoundException
 import keystoneauth1.loading
 import keystoneauth1.session
 import keystoneauth1
@@ -735,6 +736,18 @@ class OpenstackVimDriver(VimDriver):
             if network_id in connected_networks:
                 return ext_net.get('extId')
         raise Exception('No external network found connected to network {}'.format(network_id))
+
+    def rebuild_server(self, vim_instance: dict, server_id: str, image_id: str, nova_client=None):
+        if nova_client is None:
+            nova_client = self.get_nova_client(vim_instance)
+        try:
+            server = nova_client.servers.get(server_id)
+        except ServerNotFoundException as e:
+            raise Exception('Unable to find VM with ID {}: {}'.format(server_id, e))
+        try:
+            server.rebuild(image_id)
+        except Exception as e:
+            raise Exception('Exception while rebuilding VM with ID {}: {}'.format(server_id, e))
 
 
 def main():
