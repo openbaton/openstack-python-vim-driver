@@ -738,6 +738,15 @@ class OpenstackVimDriver(VimDriver):
         raise Exception('No external network found connected to network {}'.format(network_id))
 
     def rebuild_server(self, vim_instance: dict, server_id: str, image_id: str, nova_client=None):
+        """
+        Rebuild a VM with a certain image.
+
+        :param vim_instance:
+        :param server_id: the ID of the VM to rebuild
+        :param image_id: the ID of the image to use when rebuilding
+        :param nova_client:
+        :return: the VM as an object of type Server
+        """
         if nova_client is None:
             nova_client = self.get_nova_client(vim_instance)
         try:
@@ -745,9 +754,36 @@ class OpenstackVimDriver(VimDriver):
         except ServerNotFoundException as e:
             raise Exception('Unable to find VM with ID {}: {}'.format(server_id, e))
         try:
-            server.rebuild(image_id)
+            server = server.rebuild(image_id)
         except Exception as e:
             raise Exception('Exception while rebuilding VM with ID {}: {}'.format(server_id, e))
+        return self.__os_server_to_ob_server(server, self.list_images(vim_instance),
+                                             self.list_flavors(vim_instance, nova_client))
+
+    def create_network(self, vim_instance: dict, network: dict, neutron_client=None):
+        """
+        Creates a new network on OpenStack.
+
+        :param vim_instance:
+        :param network: a dictionary containing the keys: name and shared
+        :param neutron_client:
+        :return: the created network
+        """
+        if neutron_client is None:
+            neutron_client = self.get_neutron_client(vim_instance)
+        if (network.get('name') in [None, '']):
+            raise ValueError('The network name has to be provided when creating a network')
+        try:
+            net = neutron_client.create_network({'network': {
+                'name': network.get('name'),
+                'admin_state_up': True,
+                'shared': network.get('shared') or False
+            }}).get('network')
+            assert net is not None and type(net) is dict
+        except Exception as e:
+            raise Exception('Exception while creating the network {}: {}'.format(network.get('name'), e))
+        return Network(name=net.get('name'), ext_id=net.get('id'), external=net.get('router:external'),
+                       shared=net.get('shared'), subnets=[])
 
 
 def main():
