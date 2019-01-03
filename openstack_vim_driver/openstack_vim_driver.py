@@ -263,14 +263,15 @@ class OpenstackVimDriver(VimDriver):
             return None
         subnet = subnets[0]
         return Subnet(name=subnet.get('name'), ext_id=subnet.get('id'),
-                      network_id=subnet.get('network_id'), cidr=subnet.get('cidr'), gateway_ip=subnet.get('gateway_ip'))
+                      network_id=subnet.get('network_id'), cidr=subnet.get('cidr'), gateway_ip=subnet.get('gateway_ip'),
+                      dns=subnet.get('dns_nameservers'))
 
     def __list_subnets(self, neutron_client=None, vim_instance=None):
         if neutron_client is None:
             neutron_client = self.get_neutron_client(vim_instance)
         return [Subnet(name=subnet.get('name'), ext_id=subnet.get('id'),
                        network_id=subnet.get('network_id'), cidr=subnet.get('cidr'),
-                       gateway_ip=subnet.get('gateway_ip'))
+                       gateway_ip=subnet.get('gateway_ip'), dns=subnet.get('dns_nameservers'))
                 for subnet in neutron_client.list_subnets().get('subnets')]
 
     def __list_network_dicts(self, vim_instance: dict, neutron_client=None):
@@ -279,6 +280,13 @@ class OpenstackVimDriver(VimDriver):
         return neutron_client.list_networks().get('networks')
 
     def __list_routers(self, vim_instance, neutron_client=None):
+        """
+        Returns ALL the routers (independent of the project they belong to) on OpenStack.
+
+        :param vim_instance:
+        :param neutron_client:
+        :return:
+        """
         if neutron_client is None:
             neutron_client = self.get_neutron_client(vim_instance)
         routers = neutron_client.list_routers().get('routers')
@@ -769,10 +777,10 @@ class OpenstackVimDriver(VimDriver):
         :param neutron_client:
         :return: the created network
         """
-        if neutron_client is None:
-            neutron_client = self.get_neutron_client(vim_instance)
         if (network.get('name') in [None, '']):
             raise ValueError('The network name has to be provided when creating a network')
+        if neutron_client is None:
+            neutron_client = self.get_neutron_client(vim_instance)
         try:
             net = neutron_client.create_network({'network': {
                 'name': network.get('name'),
@@ -784,6 +792,168 @@ class OpenstackVimDriver(VimDriver):
             raise Exception('Exception while creating the network {}: {}'.format(network.get('name'), e))
         return Network(name=net.get('name'), ext_id=net.get('id'), external=net.get('router:external'),
                        shared=net.get('shared'), subnets=[])
+
+    def get_network_by_id(self, vim_instance: dict, ext_id: str, neutron_client=None):
+        """
+        Returns the network with the given OpenStack ID. Returns None if no network was found.
+
+        :param vim_instance:
+        :param ext_id:
+        :param neutron_client:
+        :return:
+        """
+        if neutron_client is None:
+            neutron_client = self.get_neutron_client(vim_instance)
+        for net in self.list_networks(vim_instance, neutron_client):
+            if net.extId == ext_id:
+                return net
+
+    # def __delete_port(self, vim_instance: dict, port_id: str, neutron_client=None):
+    #     if neutron_client is None:
+    #         neutron_client = self.get_neutron_client(vim_instance)
+    #     try:
+    #         neutron_client.delete_port(port_id)
+    #     except Exception as e:
+    #         raise Exception('Unable to remove port {}: {}'.format(port_id, e))
+    #
+    # def __detach_port(self, vim_instance: dict, port, neutron_client=None):
+    #     if neutron_client is None:
+    #         neutron_client = self.get_neutron_client(vim_instance)
+    #     neutron_client.rou
+
+    def delete_network(self, vim_instance: dict, ext_id: str, neutron_client=None):
+        if neutron_client is None:
+            neutron_client = self.get_neutron_client(vim_instance)
+
+        for port in self.__list_ports(vim_instance, neutron_client):
+            if port.get('network_id') == ext_id and port.get('device_owner') == 'network:router_interface':
+                    # TODO this port is not only connected to the network but also to a router
+                    # we have to call remove_interface_router before deleting the port
+                    for router in self.__list_routers(vim_instance, neutron_client):
+                        if router.get('id') == port.get('device_id'):
+                            neutron_client.remove_interface_router(router.get('id'), {'port_id': port.get('id')})
+                            break
+        try:
+            neutron_client.delete_network(ext_id)
+        except Exception as e:
+            raise Exception('Unable to remove network with ID {}: {}'.format(ext_id, e))
+        return True
+
+    def __get_external_network_dict(self, vim_instance: dict, neutron_client=None):
+        """
+        Returns the first external network found in OpenStack as a dictionary
+        and None if no external network was found.
+
+        :param vim_instance:
+        :param neutron_client:
+        :return:
+        """
+        if neutron_client is None:
+            neutron_client = self.get_neutron_client(vim_instance)
+        for net in self.__list_network_dicts(vim_instance, neutron_client):
+            if net.get('router:external') == True:
+                return net
+
+    def create_subnet(self, vim_instance: dict, created_network: dict, subnet: dict, neutron_client=None):
+        """
+        Creates a new subnet and attaches it to a router.
+        If no router exists, a new one will be created.
+
+        :param vim_instance:
+        :param created_network: the network in which the subnet will be created, has to be a dict with field 'extId'
+        :param subnet: a dictionary representing the new subnet, contains the field: name, cidr and dns
+        :param neutron_client:
+        :return: an object of type Subnet
+        """
+        if not created_network.get('extId'):
+            raise ValueError('You have to provide the ID of the network in which the subnet shall be created')
+        if not subnet.get('name'):
+            raise ValueError('Unable to create subnet because no name has been passed')
+        if not subnet.get('cidr'):
+            raise ValueError('Unable to create subnet because the CIDR is not specified')
+        dns_nameservers = ['8.8.8.8']
+        if subnet.get('dns'):
+            dns_nameservers = subnet.get('dns')
+        if neutron_client is None:
+            neutron_client = self.get_neutron_client(vim_instance)
+        try:
+            snet = neutron_client.create_subnet({
+                'subnet': {
+                    'enable_dhcp': True,
+                    'network_id': created_network.get('extId'),
+                    'name': subnet.get('name'),
+                    'cidr': subnet.get('cidr'),
+                    'ip_version': 4,
+                    'dns_nameservers': dns_nameservers
+                }
+            }).get('subnet')
+            assert snet is not None and type(snet) is dict
+        except Exception as e:
+            raise Exception('Exception while creating the subnet {} in network {}: {}'.format(subnet.get('name'),
+                                                                                              created_network.get(
+                                                                                                  'extId'), e))
+
+        try:
+            self.__attach_subnet_to_router(vim_instance, snet.get('id'))
+        except Exception as e:
+            pass
+
+        return Subnet(name=snet.get('name'), ext_id=snet.get('id'),
+                      network_id=snet.get('network_id'), cidr=snet.get('cidr'), gateway_ip=snet.get('gateway_ip'))
+
+    def __attach_subnet_to_router(self, vim_instance: dict, subnet_id: str, neutron_client=None):
+        """
+        Attaches a subnet to a router.
+        To decide which router shall be used, the method looks at all the routers which belong to the tenant
+        that is specified inside the VIM. Routers which are named 'openbaton-router' are preferred otherwise the first
+        one is chosen. If no router exists, a new one will be created. This new router will be called 'openbaton-router'
+        and will be connected to the first external network that is found (if one exists).
+        :param vim_instance:
+        :param subnet_id:
+        :param neutron_client:
+        :return:
+        """
+
+        if neutron_client is None:
+            neutron_client = self.get_neutron_client(vim_instance)
+        routers = [r for r in self.__list_routers(vim_instance, neutron_client) if
+                   r.get('tenant_id') == vim_instance.get('tenant')]
+        if len(routers) == 0:
+            try:
+                router = neutron_client.create_router({
+                    'router': {
+                        'admin_state_up': True,
+                        'name': 'openbaton-router'
+                    }
+                }).get('router')
+                assert router is not None and type(router) is dict
+                try:
+                    ext_net = self.__get_external_network_dict(vim_instance, neutron_client)
+                    if ext_net is None:
+                        log.warning('No external network found to connect to the new router')
+                    else:
+                        neutron_client.add_gateway_router(router.get('id'), {"network_id": ext_net.get('id')})
+                except Exception as e:
+                    log.error('Unable to connect the new router to the external network')
+            except Exception as e:
+                raise Exception('Unable to create router: {}'.format(e))
+        else:
+            for r in routers:
+                if r.get('name') == 'openbaton-router':
+                    router = r
+                    break
+            else:
+                router = routers[0]
+
+        # attach subnet to router
+        try:
+            neutron_client.add_interface_router(router.get('id'), {
+                'subnet_id': subnet_id
+            })
+        except Exception as e:
+            raise Exception(
+                'Unable to attach subnet {} to router {}({}): {}'.format(subnet_id, router.get('name'),
+                                                                         router.get('id'), e))
 
 
 def main():
