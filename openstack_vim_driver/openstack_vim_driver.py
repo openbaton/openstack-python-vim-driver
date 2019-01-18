@@ -1004,7 +1004,7 @@ def main():
         except Exception as e:
             sys.stderr.write('Error in logging configuration. Using the default configuration: {}\n'.format(e))
             logging.basicConfig()
-        cp = configparser.ConfigParser()
+        cp = configparser.ConfigParser(os.environ)
         try:
             cp.read(config_file_location)
             conf_map = get_map('general', cp)
