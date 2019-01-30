@@ -150,7 +150,8 @@ class OpenstackVimDriver(VimDriver):
                          container_format=i.get('container_format'),
                          status=ImageStatus(i.get('status').upper())) for i in glance_client.images.list()]
 
-    def add_image(self, vim_instance: dict, image: dict, image_file_or_url, glance_client=None) -> NFVImage:
+    def add_image(self, vim_instance: dict, image: dict, image_file_or_url, image_repo_token=None,
+                  glance_client=None) -> NFVImage:
         """
         Add an image to OpenStack. The method expects the a URL pointing to the image file.
 
@@ -185,6 +186,7 @@ class OpenstackVimDriver(VimDriver):
                 'The amount of RAM (in MB) required to boot the image has to be set to a non-negative integer value')
         if glance_client is None:
             glance_client = self.get_glance_client(vim_instance)
+        log.info('Uploading image {} to VIM {}'.format(image_name, vim_instance.get('name')))
         # create image
         try:
             image_created = glance_client.images.create(name=image_name, disk_format=disk_format.lower(),
@@ -196,17 +198,30 @@ class OpenstackVimDriver(VimDriver):
             log.error('Exception while creating the image {}: {}'.format(image_name, e))
             raise
         try:
-            with requests.get(image_file_or_url, stream=True) as image_request:
+            exception_occurred = True
+            params = {'token': image_repo_token} if image_repo_token is not None else None
+            with requests.get(image_file_or_url, stream=True, params=params) as image_request:
                 # upload data to image
                 glance_client.images.upload(image_created.id, image_request.raw)
+                log.info('Upload process of image {} finished'.format(image_name))
+            exception_occurred = False
+        except requests.exceptions.SSLError:
+            log.error('Exception while uploading image to VIM {} ({}). The NFVO seems to use HTTPS. '
+                      'In this case the openstack-vim-driver is not able to retrieve image files '
+                      'from the NFVO\'s image repository'.format(
+                vim_instance.get('name'), vim_instance.get('id')))
+            raise Exception('openstack-vim-driver cannot retrieve image files from image repository if HTTPS is used')
         except Exception as e:
-            log.error('Exception while uploading image to VIM {} ({}): {}'.format(vim_instance.get('name'),
-                                                                                  vim_instance.get('id'), e))
-            try:
-                # delete image if upload of data failed
-                glance_client.images.delete(image_created.id)
-            except:
-                log.error('Exception while removing image')
+            raise Exception('Exception while uploading image to VIM {} ({}): {}'.format(vim_instance.get('name'),
+                                                                                        vim_instance.get('id'), e))
+        finally:
+            if exception_occurred:
+                try:
+                    # delete image if upload of data failed
+                    glance_client.images.delete(image_created.id)
+                except:
+                    log.error('Exception while removing image')
+
         try:
             image_created = glance_client.images.get(image_created.id)
         except:
@@ -827,12 +842,12 @@ class OpenstackVimDriver(VimDriver):
 
         for port in self.__list_ports(vim_instance, neutron_client):
             if port.get('network_id') == ext_id and port.get('device_owner') == 'network:router_interface':
-                    # TODO this port is not only connected to the network but also to a router
-                    # we have to call remove_interface_router before deleting the port
-                    for router in self.__list_routers(vim_instance, neutron_client):
-                        if router.get('id') == port.get('device_id'):
-                            neutron_client.remove_interface_router(router.get('id'), {'port_id': port.get('id')})
-                            break
+                # TODO this port is not only connected to the network but also to a router
+                # we have to call remove_interface_router before deleting the port
+                for router in self.__list_routers(vim_instance, neutron_client):
+                    if router.get('id') == port.get('device_id'):
+                        neutron_client.remove_interface_router(router.get('id'), {'port_id': port.get('id')})
+                        break
         try:
             neutron_client.delete_network(ext_id)
         except Exception as e:
