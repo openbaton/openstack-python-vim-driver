@@ -428,7 +428,7 @@ class OpenstackVimDriver(VimDriver):
             for subnet_id in subnet_ids:
                 for subnet in subnets:
                     if ipaddress.ip_address(fixed_ip) in list(
-                            ipaddress.ip_network(subnet.get('cidr')).hosts()):
+                            ipaddress.ip_network(subnet.cidr).hosts()):
                         fitting_subnet_id = subnet_id
                         break
                 else:
